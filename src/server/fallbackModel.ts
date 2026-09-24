@@ -26,8 +26,8 @@ const OTHER_ERROR_COOLDOWN_MS = 2 * MINUTE;
 const QUOTA_PATTERN =
   /quota|rate.?limit|too many|exceed|insufficient|balance|credit|limit reached|usage limit/i;
 
-// Per-isolate memory. Resets when the worker isolate recycles, which only
-// means one extra failed attempt against an exhausted upstream.
+// In-process memory. A server restart forgets it, which only costs one extra
+// failed attempt against an exhausted upstream.
 const parkedUntil = new Map<string, number>();
 
 // Qwen3 on Workers AI thinks for minutes before its first tool call unless
