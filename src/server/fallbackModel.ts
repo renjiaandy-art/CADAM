@@ -30,11 +30,27 @@ const QUOTA_PATTERN =
 // means one extra failed attempt against an exhausted upstream.
 const parkedUntil = new Map<string, number>();
 
+// Qwen3 on Workers AI thinks for minutes before its first tool call unless
+// thinking is switched off through the chat template.
+function fetchWithExtraBody(extra: Record<string, unknown>): typeof fetch {
+  return async (input, init) => {
+    if (typeof init?.body === 'string') {
+      try {
+        init = { ...init, body: JSON.stringify({ ...JSON.parse(init.body), ...extra }) };
+      } catch {
+        // not JSON: send unchanged
+      }
+    }
+    return fetch(input, init);
+  };
+}
+
 function openAICompatibleModel(
   name: string,
   baseURL: string,
   apiKey: string,
   modelId: string,
+  extraBody?: Record<string, unknown>,
 ): LanguageModelV3 {
   return createOpenAICompatible({
     name,
@@ -43,6 +59,7 @@ function openAICompatibleModel(
     // xKiro sits behind Cloudflare bot protection that rejects requests
     // without a normal User-Agent (error 1010).
     headers: { 'User-Agent': 'cadam-rj/1.0' },
+    ...(extraBody ? { fetch: fetchWithExtraBody(extraBody) } : {}),
   }).chatModel(modelId);
 }
 
@@ -55,11 +72,12 @@ function configuredUpstreams(): Upstream[] {
     modelId: string,
     maxOutputTokens: number,
     quotaCooldownMs: number,
+    extraBody?: Record<string, unknown>,
   ) => {
     if (!baseURL || !apiKey || !modelId) return;
     upstreams.push({
       name,
-      model: openAICompatibleModel(name, baseURL, apiKey, modelId),
+      model: openAICompatibleModel(name, baseURL, apiKey, modelId, extraBody),
       maxOutputTokens,
       quotaCooldownMs,
     });
@@ -89,6 +107,7 @@ function configuredUpstreams(): Upstream[] {
       env(`WORKERS_AI_MODEL${suffix}`) || '@cf/qwen/qwen3.8-27b',
       16000,
       60 * MINUTE,
+      { chat_template_kwargs: { enable_thinking: false } },
     );
   }
   return upstreams;
