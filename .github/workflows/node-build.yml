@@ -1,4 +1,4 @@
-name: pages-build
+name: node-build
 on:
   push:
     branches: [rj-deploy]
@@ -23,22 +23,19 @@ jobs:
       # package.json gained @ai-sdk/openai-compatible, so the lockfile is
       # refreshed here instead of `npm ci`.
       - run: npm install --no-audit --no-fund
-      - name: Build for Cloudflare Pages
+      - name: Build (Nitro node-server)
         env:
-          NITRO_PRESET: cloudflare_pages
+          NITRO_PRESET: node_server
           VITE_SUPABASE_URL: ${{ inputs.supabase_url || 'https://placeholder.supabase.co' }}
           VITE_SUPABASE_ANON_KEY: ${{ inputs.supabase_anon_key || 'placeholder-anon-key' }}
         run: npm run build
       - name: Show build output layout
         run: |
-          ls -la dist .output 2>/dev/null || true
-          find dist .output -maxdepth 2 2>/dev/null | head -40
-          cat dist/_routes.json .output/public/_routes.json 2>/dev/null || true
+          find .output -maxdepth 3 | head -40
+          du -sh .output .output/server .output/public
       - uses: actions/upload-artifact@v4
         with:
           name: cadam-build
-          path: |
-            dist
-            .output
+          path: .output
           include-hidden-files: true
           retention-days: 30
