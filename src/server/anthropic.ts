@@ -1,4 +1,6 @@
+import { generateText, type UserContent } from 'ai';
 import { requiredEnv } from './env';
+import { fallbackChainConfigured, fallbackChatModel } from './fallbackModel';
 
 type AnthropicContent =
   | string
@@ -43,6 +45,21 @@ function readAnthropicText(data: unknown): string {
   throw new Error('anthropic response missing text content');
 }
 
+function toUserContent(content: AnthropicContent): UserContent {
+  if (typeof content === 'string') return content;
+  return content.map((part) =>
+    part.type === 'text'
+      ? { type: 'text' as const, text: part.text }
+      : part.source.type === 'base64'
+        ? {
+            type: 'image' as const,
+            image: part.source.data,
+            mediaType: part.source.media_type,
+          }
+        : { type: 'image' as const, image: new URL(part.source.url) },
+  );
+}
+
 export async function createAnthropicText({
   model,
   system,
@@ -54,6 +71,16 @@ export async function createAnthropicText({
   content: AnthropicContent;
   maxTokens: number;
 }): Promise<string> {
+  if (fallbackChainConfigured()) {
+    const result = await generateText({
+      model: fallbackChatModel(),
+      system,
+      maxOutputTokens: maxTokens,
+      messages: [{ role: 'user', content: toUserContent(content) }],
+    });
+    return result.text.trim();
+  }
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {

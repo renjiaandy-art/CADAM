@@ -78,7 +78,10 @@ const DEV_TOKENS = {
   total: 3_000_000,
 };
 
-const isBypassed = () => env('ENVIRONMENT') === 'local';
+// Self-hosted deployments have no billing service: treat a missing
+// BILLING_SERVICE_URL like local dev (unlimited balance, consume is a no-op).
+const isBypassed = () =>
+  env('ENVIRONMENT') === 'local' || !env('BILLING_SERVICE_URL');
 
 const devStatus = (): BillingStatus => ({
   user: { hasTrialed: false },

@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { billing, BillingClientError } from './billingClient';
 import { corsHeaders, isRecord } from './api';
 import { env, requiredEnv } from './env';
+import { fallbackChainConfigured, fallbackChatModel } from './fallbackModel';
 import { logError } from './serverLog';
 import {
   decidePersistAction,
@@ -463,6 +464,8 @@ function buildChatModel(
   thinking: boolean,
   thinkingBudget: number = THINKING_BUDGET_TOKENS,
 ): { model: LanguageModel; providerOptions?: ProviderOptions } {
+  if (fallbackChainConfigured()) return { model: fallbackChatModel() };
+
   const hasCappedThinkingBudget =
     thinking && thinkingBudget !== THINKING_BUDGET_TOKENS;
 
@@ -803,16 +806,16 @@ async function loadBranchFromDb({
 }
 
 async function generateConversationTitle({
-  anthropic,
+  helperModel,
   firstMessage,
 }: {
-  anthropic: AnthropicProvider;
+  helperModel: LanguageModel;
   firstMessage: AppUIMessage;
 }) {
   const text = getParametricText(firstMessage.parts) || 'New conversation';
   try {
     const result = await generateText({
-      model: anthropic('claude-haiku-4-5'),
+      model: helperModel,
       system:
         'Generate a short title for a 3D creation conversation. Return only the title.',
       prompt: text,
@@ -835,11 +838,11 @@ async function generateConversationTitle({
  * specific assistant turn.
  */
 async function generateConversationSuggestions({
-  anthropic,
+  helperModel,
   branch,
   conversationType,
 }: {
-  anthropic: AnthropicProvider;
+  helperModel: LanguageModel;
   branch: AppUIMessage[];
   conversationType: 'parametric' | 'creative';
 }): Promise<string[]> {
@@ -857,7 +860,7 @@ async function generateConversationSuggestions({
   const summary = `User request: ${firstUserText.slice(0, 400)}\n\nMost recent assistant reply: ${lastAssistantText.slice(0, 400)}`;
   try {
     const result = await generateText({
-      model: anthropic('claude-haiku-4-5'),
+      model: helperModel,
       system:
         conversationType === 'creative'
           ? 'Given a 3D mesh design conversation, return an array of exactly 2 follow-up prompts the user might want to send next. Each prompt is a concise instruction of 3 words or fewer, not a question. Return exactly 2 items — no more, no fewer.'
@@ -1037,6 +1040,7 @@ function parametricTools({
 }
 
 function chatModel(conversation: ConversationAccess, model: Model) {
+  if (fallbackChainConfigured()) return 'rj/fallback' as Model;
   if (conversation.type === 'creative') {
     return 'anthropic/claude-sonnet-4.5';
   }
@@ -1171,6 +1175,11 @@ export async function handleAiChatRequest(req: Request) {
     });
     return jsonResponse({ error: 'AI provider not configured on server' }, 503);
   }
+  const helperModel: LanguageModel | undefined = fallbackChainConfigured()
+    ? fallbackChatModel()
+    : env('ANTHROPIC_API_KEY')
+      ? providers.anthropic()('claude-haiku-4-5')
+      : undefined;
 
   // Title is generated INSIDE the stream's execute (below), as a transient
   // `data-title-update` part — that way the client receives it without a
@@ -1464,10 +1473,10 @@ export async function handleAiChatRequest(req: Request) {
     execute: async ({ writer }) => {
       // Title (first user turn only) runs in parallel with the model
       // stream — fire-and-forget; the assistant doesn't wait on it.
-      if (isFirstUserTurn && env('ANTHROPIC_API_KEY')) {
+      if (isFirstUserTurn && helperModel) {
         void emitConversationTitle({
           writer,
-          anthropic: providers.anthropic(),
+          helperModel,
           supabaseClient,
           conversation,
           firstMessage: branchMessages[0],
@@ -1610,7 +1619,7 @@ export async function handleAiChatRequest(req: Request) {
             // continuation `onFinish` will fire suggestions for the real
             // final state. Avoids a wasted Haiku call AND prevents
             // mid-turn placeholder pills.
-            if (!hasPendingToolCall && env('ANTHROPIC_API_KEY')) {
+            if (!hasPendingToolCall && helperModel) {
               // MUST be awaited (not `void`). `createUIMessageStream`
               // closes the SSE controller as soon as the merged stream
               // drains — and the merged stream resolves once this
@@ -1624,7 +1633,7 @@ export async function handleAiChatRequest(req: Request) {
               // tradeoff for getting pills delivered.
               await emitConversationSuggestions({
                 writer,
-                anthropic: providers.anthropic(),
+                helperModel,
                 supabaseClient,
                 conversation,
                 branch: [
@@ -1656,19 +1665,19 @@ export async function handleAiChatRequest(req: Request) {
  */
 async function emitConversationTitle({
   writer,
-  anthropic,
+  helperModel,
   supabaseClient,
   conversation,
   firstMessage,
 }: {
   writer: UIMessageStreamWriter<AppUIMessage>;
-  anthropic: AnthropicProvider;
+  helperModel: LanguageModel;
   supabaseClient: SupabaseAnon;
   conversation: ConversationAccess;
   firstMessage: AppUIMessage;
 }) {
   try {
-    const title = await generateConversationTitle({ anthropic, firstMessage });
+    const title = await generateConversationTitle({ helperModel, firstMessage });
     await supabaseClient
       .from('conversations')
       .update({ title })
@@ -1698,20 +1707,20 @@ async function emitConversationTitle({
  */
 async function emitConversationSuggestions({
   writer,
-  anthropic,
+  helperModel,
   supabaseClient,
   conversation,
   branch,
 }: {
   writer: UIMessageStreamWriter<AppUIMessage>;
-  anthropic: AnthropicProvider;
+  helperModel: LanguageModel;
   supabaseClient: SupabaseAnon;
   conversation: ConversationAccess;
   branch: AppUIMessage[];
 }) {
   try {
     const suggestions = await generateConversationSuggestions({
-      anthropic,
+      helperModel,
       branch,
       conversationType: conversation.type,
     });
