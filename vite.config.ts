@@ -55,7 +55,9 @@ export default defineConfig({
     }),
     nitro({
       baseURL: normalizedAppBase,
-      inlineDynamicImports: true,
+      // Inlining everything into one chunk breaks module init order once
+      // wrangler re-bundles it for workerd ("__esmMin is not a function").
+      inlineDynamicImports: process.env.NITRO_PRESET !== 'cloudflare_pages',
       // Self-hosted on Cloudflare Pages: the preset's `wrangler pages dev`
       // preview rejects the --host flag Nitro appends during prerendering.
       ...(process.env.NITRO_PRESET === 'cloudflare_pages'
